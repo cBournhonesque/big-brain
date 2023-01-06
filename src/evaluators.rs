@@ -30,7 +30,7 @@ impl LinearEvaluator {
     pub fn new_ranged(min: f32, max: f32) -> Self {
         Self::new_full(min, 0.0, max, 1.0)
     }
-    fn new_full(xa: f32, ya: f32, xb: f32, yb: f32) -> Self {
+    pub fn new_full(xa: f32, ya: f32, xb: f32, yb: f32) -> Self {
         Self {
             xa,
             ya,
@@ -75,7 +75,7 @@ impl PowerEvaluator {
     pub fn new_ranged(power: f32, min: f32, max: f32) -> Self {
         Self::new_full(power, min, 0.0, max, 1.0)
     }
-    fn new_full(power: f32, xa: f32, ya: f32, xb: f32, yb: f32) -> Self {
+    pub fn new_full(power: f32, xa: f32, ya: f32, xb: f32, yb: f32) -> Self {
         Self {
             power: clamp(power, 0.0, 10000.0),
             dy: yb - ya,
