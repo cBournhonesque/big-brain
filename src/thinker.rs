@@ -518,7 +518,7 @@ fn exec_picked_action(
                     *curr_action_state = ActionState::Cancelled;
                 }
                 ActionState::Init | ActionState::Success | ActionState::Failure => {
-                    debug!("Previous action already completed. Despawning action entity.",);
+                    debug!("Previous action completed. Despawning action entity.",);
                     // Despawn the action itself.
                     cmd.entity(action_ent.0).despawn_recursive();
                     if let Some((Scorer(ent), score)) = scorer_info {
