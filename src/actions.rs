@@ -311,7 +311,7 @@ pub fn steps_system(
 }
 
 /**
-[`ActionBuilder`] for the [`Concurrently`] component. Constructed through `Concurrently::build()`.
+Internal [`ActionBuilder`] for the [`Concurrently`] component. Constructed through `Concurrently::build()`.
 */
 #[derive(Debug)]
 pub struct ConcurrentlyBuilder {
@@ -368,19 +368,8 @@ impl ActionBuilder for ConcurrentlyBuilder {
 }
 
 /**
-Composite Action that executes a number of Actions concurrently, as long as they all result in a `Success`ful [`ActionState`].
-
-### Example
-
-```ignore
-Thinker::build()
-    .when(
-        MyScorer,
-        Concurrent::build()
-            .push(MyAction)
-            .push(MyOtherAction)
-        )
-```
+Internal Composite action type that executes a number of Actions concurrently.
+Is used for the [`Race`] and [`Join`] composite actions.
 */
 #[derive(Component, Debug)]
 pub struct Concurrently {
@@ -391,9 +380,9 @@ pub struct Concurrently {
 #[derive(Copy, Clone, Debug)]
 pub enum ConcurrentMode {
     /// Reaches success when any of the concurrent actions reaches Success
-    AnySuccess,
+    Race,
     /// Reaches success when all of the concurrent actions reach Success
-    AllSuccess,
+    Join,
 }
 
 impl Concurrently {
@@ -402,7 +391,75 @@ impl Concurrently {
     */
     pub fn build() -> ConcurrentlyBuilder {
         ConcurrentlyBuilder {
-            mode: ConcurrentMode::AllSuccess,
+            mode: ConcurrentMode::Join,
+            actions: Vec::new(),
+            label: None,
+        }
+    }
+}
+
+/**
+Composite Action that executes a number of Actions concurrently.
+
+The composite action:
+- succeeds if all sub-action succeeds
+- fails if any sub-action fail
+
+### Example
+
+```ignore
+Thinker::build()
+    .when(
+        MyScorer,
+        Join::build()
+            .push(MyAction)
+            .push(MyOtherAction)
+        )
+```
+ */
+pub struct Join {}
+
+impl Join {
+    /**
+    Construct a new [`ConcurrentlyBuilder`] to define the actions to take in parallel.
+     */
+    pub fn build() -> ConcurrentlyBuilder {
+        ConcurrentlyBuilder {
+            mode: ConcurrentMode::Join,
+            actions: Vec::new(),
+            label: None,
+        }
+    }
+}
+
+/**
+Composite Action that executes a number of Actions concurrently.
+
+The composite action:
+- succeeds if any sub-action is succeeds
+- fails if all sub-action fail
+
+### Example
+
+```ignore
+Thinker::build()
+    .when(
+        MyScorer,
+        Race::build()
+            .push(MyAction)
+            .push(MyOtherAction)
+        )
+```
+ */
+pub struct Race {}
+
+impl Race {
+    /**
+    Construct a new [`ConcurrentlyBuilder`] to define the actions to take in parallel.
+    */
+    pub fn build() -> ConcurrentlyBuilder {
+        ConcurrentlyBuilder {
+            mode: ConcurrentMode::Race,
             actions: Vec::new(),
             label: None,
         }
@@ -437,102 +494,102 @@ pub fn concurrent_system(
                     *child_state = Requested;
                 }
             }
-            Executing => {
-                match concurrent_action.mode {
-                    ConcurrentMode::AllSuccess => {
-                        let mut all_success = true;
-                        let mut failed_idx = None;
-                        for (idx, action) in concurrent_action.actions.iter().enumerate() {
-                            let child_ent = action.entity();
-                            let mut child_state = states_q.get_mut(child_ent).expect("uh oh");
-                            match *child_state {
-                                Failure => {
-                                    failed_idx = Some(idx);
-                                    all_success = false;
-                                    #[cfg(feature = "trace")]
-                                    trace!("Concurrently action has failed. Cancelling all other actions that haven't completed yet.");
-                                }
-                                Success => {}
-                                _ => {
-                                    all_success = false;
-                                    if failed_idx.is_some() {
-                                        *child_state = Cancelled;
-                                    }
+            Executing => match concurrent_action.mode {
+                ConcurrentMode::Join => {
+                    let mut all_success = true;
+                    let mut failed_idx = None;
+                    for (idx, action) in concurrent_action.actions.iter().enumerate() {
+                        let child_ent = action.entity();
+                        let mut child_state = states_q.get_mut(child_ent).expect("uh oh");
+                        match *child_state {
+                            Failure => {
+                                failed_idx = Some(idx);
+                                all_success = false;
+                                #[cfg(feature = "trace")]
+                                trace!("Join action has failed. Cancelling all other actions that haven't completed yet.");
+                            }
+                            Success => {}
+                            _ => {
+                                all_success = false;
+                                if failed_idx.is_some() {
+                                    *child_state = Cancelled;
                                 }
                             }
-                        }
-                        if all_success {
-                            let mut state_var = states_q.get_mut(seq_ent).expect("uh oh");
-                            *state_var = Success;
-                        } else if let Some(idx) = failed_idx {
-                            for action in concurrent_action.actions.iter().take(idx) {
-                                let child_ent = action.entity();
-                                let mut child_state = states_q.get_mut(child_ent).expect("uh oh");
-                                match *child_state {
-                                    Failure | Success => {}
-                                    _ => {
-                                        *child_state = Cancelled;
-                                    }
-                                }
-                            }
-                            let mut state_var = states_q.get_mut(seq_ent).expect("uh oh");
-                            *state_var = Cancelled;
                         }
                     }
-                    ConcurrentMode::AnySuccess => {
-                        let mut all_failure = true;
-                        let mut succeed_idx = None;
-                        for (idx, action) in concurrent_action.actions.iter().enumerate() {
+                    if all_success {
+                        let mut state_var = states_q.get_mut(seq_ent).expect("uh oh");
+                        *state_var = Success;
+                    } else if let Some(idx) = failed_idx {
+                        for action in concurrent_action.actions.iter().take(idx) {
                             let child_ent = action.entity();
                             let mut child_state = states_q.get_mut(child_ent).expect("uh oh");
                             match *child_state {
-                                Failure => {}
-                                Success => {
-                                    succeed_idx = Some(idx);
-                                    all_failure = false;
-                                    #[cfg(feature = "trace")]
-                                    trace!("Concurrently action (Mode: AnySuccess) has succeeded. Cancelling all other actions that haven't completed yet.");
-                                }
+                                Failure | Success => {}
                                 _ => {
-                                    all_failure = false;
-                                    if succeed_idx.is_some() {
-                                        *child_state = Cancelled;
-                                    }
+                                    *child_state = Cancelled;
                                 }
                             }
                         }
-                        if all_failure {
-                            info!("ALL FAILED");
-                            let mut state_var = states_q.get_mut(seq_ent).expect("uh oh");
-                            *state_var = Failure;
-                        } else if let Some(idx) = succeed_idx {
-                            info!("ANY SUCCESS");
-                            for action in concurrent_action.actions.iter().take(idx) {
-                                let child_ent = action.entity();
-                                let mut child_state = states_q.get_mut(child_ent).expect("uh oh");
-                                match *child_state {
-                                    Failure | Success => {}
-                                    _ => {
-                                        *child_state = Cancelled;
-                                    }
-                                }
-                            }
-                            let mut state_var = states_q.get_mut(seq_ent).expect("uh oh");
-                            *state_var = Success;
-                        }
+                        let mut state_var = states_q.get_mut(seq_ent).expect("uh oh");
+                        *state_var = Failure;
                     }
                 }
-            }
+                ConcurrentMode::Race => {
+                    let mut all_failure = true;
+                    let mut succeed_idx = None;
+                    for (idx, action) in concurrent_action.actions.iter().enumerate() {
+                        let child_ent = action.entity();
+                        let mut child_state = states_q.get_mut(child_ent).expect("uh oh");
+                        match *child_state {
+                            Failure => {}
+                            Success => {
+                                succeed_idx = Some(idx);
+                                all_failure = false;
+                                #[cfg(feature = "trace")]
+                                trace!("Race action has succeeded. Cancelling all other actions that haven't completed yet.");
+                            }
+                            _ => {
+                                all_failure = false;
+                                if succeed_idx.is_some() {
+                                    *child_state = Cancelled;
+                                }
+                            }
+                        }
+                    }
+                    if all_failure {
+                        let mut state_var = states_q.get_mut(seq_ent).expect("uh oh");
+                        *state_var = Failure;
+                    } else if let Some(idx) = succeed_idx {
+                        for action in concurrent_action.actions.iter().take(idx) {
+                            let child_ent = action.entity();
+                            let mut child_state = states_q.get_mut(child_ent).expect("uh oh");
+                            match *child_state {
+                                Failure | Success => {}
+                                _ => {
+                                    *child_state = Cancelled;
+                                }
+                            }
+                            let mut state_var = states_q.get_mut(seq_ent).expect("uh oh");
+                            *state_var = Success;
+                        }
+                        let mut state_var = states_q.get_mut(seq_ent).expect("uh oh");
+                        *state_var = Success;
+                    }
+                }
+            },
             Cancelled => {
                 // Cancel all actions
                 let mut all_done = true;
                 let mut any_failed = false;
+                let mut any_success = false;
                 for action in concurrent_action.actions.iter() {
                     let child_ent = action.entity();
                     let mut child_state = states_q.get_mut(child_ent).expect("uh oh");
                     match *child_state {
-                        Init | Success => {
-                            // Do nothing
+                        Init => {}
+                        Success => {
+                            any_success = true;
                         }
                         Failure => {
                             any_failed = true;
@@ -545,14 +602,29 @@ pub fn concurrent_system(
                 }
                 if all_done {
                     let mut state_var = states_q.get_mut(seq_ent).expect("uh oh");
-                    if any_failed {
-                        #[cfg(feature = "trace")]
-                        trace!("Concurrently action has failed due to failed children.");
-                        *state_var = Failure;
-                    } else {
-                        #[cfg(feature = "trace")]
-                        trace!("All Concurrently children have completed Successfully.");
-                        *state_var = Success;
+                    match concurrent_action.mode {
+                        ConcurrentMode::Race => {
+                            if any_success {
+                                #[cfg(feature = "trace")]
+                                trace!("Race action has succeeded due to succeeded children.");
+                                *state_var = Success;
+                            } else {
+                                #[cfg(feature = "trace")]
+                                trace!("No race children has completed Successfully.");
+                                *state_var = Failure;
+                            }
+                        }
+                        ConcurrentMode::Join => {
+                            if any_failed {
+                                #[cfg(feature = "trace")]
+                                trace!("Join action has failed due to failed children.");
+                                *state_var = Failure;
+                            } else {
+                                #[cfg(feature = "trace")]
+                                trace!("All Join children have completed Successfully.");
+                                *state_var = Success;
+                            }
+                        }
                     }
                 }
             }
